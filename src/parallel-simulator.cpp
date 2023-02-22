@@ -20,7 +20,6 @@ public:
                                               Vec2 bmin, Vec2 bmax) {
 
     std::unique_ptr<QuadTreeNode> curNode(new QuadTreeNode);
-
     if (particles.size() <= QuadTreeLeafSize)
     { 
       curNode->isLeaf = true;
@@ -33,44 +32,59 @@ public:
       Vec2 pivot;
       pivot.x = (bmax.x + bmin.x) / 2;
       pivot.y = (bmax.y + bmin.y) / 2;
-
-      std::vector<Particle> childVectors[4];
       
-      for(Particle &p : particles)
+      std::vector<Particle> totalChildVectors[4];
+      #pragma omp parallel
       {
-        bool isLeft = p.position.x < pivot.x;
-        bool isUp = p.position.y < pivot.y;
+        std::vector<Particle> childVectors[4];
+        #pragma omp for nowait
+        for(int idx = 0; idx < particles.size(); idx++)
+        {
+            const Particle &p = particles[idx];
+            bool isLeft = p.position.x < pivot.x;
+            bool isUp = p.position.y < pivot.y;
 
-        if (isLeft && isUp)
-          childVectors[0].push_back(p);
-        else if (!isLeft && isUp)
-          childVectors[1].push_back(p);
-        else if (isLeft && !isUp)
-          childVectors[2].push_back(p);
-        else
-          childVectors[3].push_back(p);
+            if (isLeft && isUp)
+            childVectors[0].push_back(p);
+            else if (!isLeft && isUp)
+            childVectors[1].push_back(p);
+            else if (isLeft && !isUp)
+            childVectors[2].push_back(p);
+            else
+            childVectors[3].push_back(p);
+        }
+        for(int i = 0; i < 4; i++)
+        {
+            int j = (omp_get_thread_num() + i)%4;
+            if(childVectors[j].size())
+            {
+                #pragma omp critical
+                {
+                    totalChildVectors[j].insert(totalChildVectors[j].end(), childVectors[j].begin(), childVectors[j].end());
+                }
+            }
+        }
       }
       
-
       #pragma omp parallel for schedule(dynamic)
       for (int i = 0; i < 4; i++)
       {
         if (i == 0)
-          curNode->children[0] = buildQuadTree(childVectors[0], bmin, pivot);
+          curNode->children[0] = buildQuadTree(totalChildVectors[0], bmin, pivot);
         else if (i == 1)
         {
           Vec2 topRightMin = {pivot.x, bmin.y};
           Vec2 topRightMax = {bmax.x, pivot.y};
-          curNode->children[1] = buildQuadTree(childVectors[1], topRightMin, topRightMax);
+          curNode->children[1] = buildQuadTree(totalChildVectors[1], topRightMin, topRightMax);
         }
         else if (i == 2)
         {
           Vec2 bottomLeftMin = {bmin.x, pivot.y};
           Vec2 bottomLeftMax = {pivot.x, bmax.y};
-          curNode->children[2] = buildQuadTree(childVectors[2], bottomLeftMin, bottomLeftMax);
+          curNode->children[2] = buildQuadTree(totalChildVectors[2], bottomLeftMin, bottomLeftMax);
         }
         else
-          curNode->children[3] = buildQuadTree(childVectors[3], pivot, bmax);
+          curNode->children[3] = buildQuadTree(totalChildVectors[3], pivot, bmax);
       }
 
       return curNode;
