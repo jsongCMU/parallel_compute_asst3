@@ -34,10 +34,15 @@ public:
       pivot.y = (bmax.y + bmin.y) / 2;
       
       std::vector<Particle> totalChildVectors[4];
+    //   totalChildVectors[0].reserve(particles.size());
+    //   totalChildVectors[1].reserve(particles.size());
+    //   totalChildVectors[2].reserve(particles.size());
+    //   totalChildVectors[3].reserve(particles.size());
+      int* offsets[4];
       #pragma omp parallel
       {
         std::vector<Particle> childVectors[4];
-        #pragma omp for nowait
+        #pragma omp for nowait schedule(dynamic, 32)
         for(int idx = 0; idx < particles.size(); idx++)
         {
             const Particle &p = particles[idx];
@@ -53,18 +58,54 @@ public:
             else
             childVectors[3].push_back(p);
         }
-        for(int i = 0; i < 4; i++)
+        // Scan to determine offset for placing in global vector
+        #pragma omp single
         {
-            int j = (omp_get_thread_num() + i)%4;
-            if(childVectors[j].size())
-            {
-                #pragma omp critical
-                {
-                    totalChildVectors[j].insert(totalChildVectors[j].end(), childVectors[j].begin(), childVectors[j].end());
-                }
-            }
+            offsets[0] = new int[omp_get_num_threads()+1];
+            offsets[1] = new int[omp_get_num_threads()+1];
+            offsets[2] = new int[omp_get_num_threads()+1];
+            offsets[3] = new int[omp_get_num_threads()+1];
+            offsets[0][0] = 0;
+            offsets[1][0] = 0;
+            offsets[2][0] = 0;
+            offsets[3][0] = 0;
         }
+        for(int i=0; i<4; i++)
+        {
+            offsets[i][omp_get_thread_num()+1] = childVectors[i].size();
+        }
+        #pragma omp barrier
+        #pragma omp single
+        for(int i = 0; i < 4; i++) // TODO: parallelize outer loop since independent
+        {
+            for(int j = 1; j<omp_get_num_threads()+1; j++)
+            {
+                offsets[i][j] += offsets[i][j-1];
+            }
+            totalChildVectors[i].resize(offsets[i][omp_get_num_threads()]);
+        }
+        // Update global
+        #pragma omp barrier
+        std::move(childVectors[0].begin(), childVectors[0].end(), totalChildVectors[0].begin()+offsets[0][omp_get_thread_num()]);
+        std::move(childVectors[1].begin(), childVectors[1].end(), totalChildVectors[1].begin()+offsets[1][omp_get_thread_num()]);
+        std::move(childVectors[2].begin(), childVectors[2].end(), totalChildVectors[2].begin()+offsets[2][omp_get_thread_num()]);
+        std::move(childVectors[3].begin(), childVectors[3].end(), totalChildVectors[3].begin()+offsets[3][omp_get_thread_num()]);
+        // for(int i = 0; i < 4; i++)
+        // {
+        //     int j = (omp_get_thread_num() + i)%4;
+        //     if(childVectors[j].size())
+        //     {
+        //         #pragma omp critical
+        //         {
+        //             totalChildVectors[j].insert(totalChildVectors[j].end(), childVectors[j].begin(), childVectors[j].end());
+        //         }
+        //     }
+        // }
       }
+      delete[] offsets[0];
+      delete[] offsets[1];
+      delete[] offsets[2];
+      delete[] offsets[3];
       
       #pragma omp parallel for schedule(dynamic)
       for (int i = 0; i < 4; i++)
@@ -129,7 +170,6 @@ public:
                             StepParameters params) override {
     // TODO: implement parallel version of quad-tree accelerated n-body
     // simulation here, using quadTree as acceleration structure
-
     #pragma omp parallel for schedule(dynamic, 4)
     for (int i = 0; i < particles.size(); i++)
     {
