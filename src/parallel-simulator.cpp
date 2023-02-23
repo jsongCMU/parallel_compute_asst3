@@ -75,7 +75,7 @@ public:
             offsets[i][omp_get_thread_num()+1] = childVectors[i].size();
         }
         #pragma omp barrier
-        #pragma omp single
+        #pragma omp for
         for(int i = 0; i < 4; i++) // TODO: parallelize outer loop since independent
         {
             for(int j = 1; j<omp_get_num_threads()+1; j++)
