@@ -17,8 +17,7 @@ public:
   // TODO: implement a function that builds and returns a quadtree containing
   // particles. You do not have to preserve this function type.
   std::unique_ptr<QuadTreeNode> buildQuadTree(std::vector<Particle> &particles,
-                                              Vec2 bmin, Vec2 bmax) {
-
+                                              Vec2 bmin, Vec2 bmax, int level = 0) {
     std::unique_ptr<QuadTreeNode> curNode(new QuadTreeNode);
     if (particles.size() <= QuadTreeLeafSize)
     { 
@@ -34,13 +33,14 @@ public:
       pivot.y = (bmax.y + bmin.y) / 2;
       
       std::vector<Particle> totalChildVectors[4];
-    //   totalChildVectors[0].reserve(particles.size());
-    //   totalChildVectors[1].reserve(particles.size());
-    //   totalChildVectors[2].reserve(particles.size());
-    //   totalChildVectors[3].reserve(particles.size());
+
       int* offsets[4];
       #pragma omp parallel
       {
+        // #pragma omp single
+        // {
+        //   printf("%d | %d\n", omp_get_num_threads(), level);
+        // }
         std::vector<Particle> childVectors[4];
         #pragma omp for nowait schedule(dynamic, 32)
         for(int idx = 0; idx < particles.size(); idx++)
@@ -85,47 +85,36 @@ public:
             totalChildVectors[i].resize(offsets[i][omp_get_num_threads()]);
         }
         // Update global
-        #pragma omp barrier
         std::move(childVectors[0].begin(), childVectors[0].end(), totalChildVectors[0].begin()+offsets[0][omp_get_thread_num()]);
         std::move(childVectors[1].begin(), childVectors[1].end(), totalChildVectors[1].begin()+offsets[1][omp_get_thread_num()]);
         std::move(childVectors[2].begin(), childVectors[2].end(), totalChildVectors[2].begin()+offsets[2][omp_get_thread_num()]);
         std::move(childVectors[3].begin(), childVectors[3].end(), totalChildVectors[3].begin()+offsets[3][omp_get_thread_num()]);
-        // for(int i = 0; i < 4; i++)
-        // {
-        //     int j = (omp_get_thread_num() + i)%4;
-        //     if(childVectors[j].size())
-        //     {
-        //         #pragma omp critical
-        //         {
-        //             totalChildVectors[j].insert(totalChildVectors[j].end(), childVectors[j].begin(), childVectors[j].end());
-        //         }
-        //     }
-        // }
       }
       delete[] offsets[0];
       delete[] offsets[1];
       delete[] offsets[2];
       delete[] offsets[3];
       
-      #pragma omp parallel for schedule(dynamic)
-      for (int i = 0; i < 4; i++)
+      #pragma omp parallel
       {
-        if (i == 0)
-          curNode->children[0] = buildQuadTree(totalChildVectors[0], bmin, pivot);
-        else if (i == 1)
+        #pragma omp single
         {
+          #pragma omp task untied
+          curNode->children[0] = buildQuadTree(totalChildVectors[0], bmin, pivot, level+1);
+
           Vec2 topRightMin = {pivot.x, bmin.y};
           Vec2 topRightMax = {bmax.x, pivot.y};
-          curNode->children[1] = buildQuadTree(totalChildVectors[1], topRightMin, topRightMax);
-        }
-        else if (i == 2)
-        {
+          #pragma omp task untied
+          curNode->children[1] = buildQuadTree(totalChildVectors[1], topRightMin, topRightMax, level+1);
+          
           Vec2 bottomLeftMin = {bmin.x, pivot.y};
           Vec2 bottomLeftMax = {pivot.x, bmax.y};
-          curNode->children[2] = buildQuadTree(totalChildVectors[2], bottomLeftMin, bottomLeftMax);
+          #pragma omp task untied
+          curNode->children[2] = buildQuadTree(totalChildVectors[2], bottomLeftMin, bottomLeftMax, level+1);
+
+          #pragma omp task untied
+          curNode->children[3] = buildQuadTree(totalChildVectors[3], pivot, bmax, level+1);
         }
-        else
-          curNode->children[3] = buildQuadTree(totalChildVectors[3], pivot, bmax);
       }
 
       return curNode;
