@@ -16,14 +16,10 @@ class ParallelNBodySimulator : public INBodySimulator {
 public:
   // TODO: implement a function that builds and returns a quadtree containing
   // particles. You do not have to preserve this function type.
-  std::unique_ptr<QuadTreeNode> buildQuadTree(std::vector<Particle> &particles,
+  std::unique_ptr<QuadTreeNode> buildQuadTree(const std::vector<Particle> &particles,
                                               Vec2 bmin, Vec2 bmax, int N, int* idx) {
 
     std::unique_ptr<QuadTreeNode> curNode(new QuadTreeNode);
-    int topLeftCount = 0;
-    int topRightCount = 0;
-    int botLeftCount = 0;
-    int botRightCount = 0;
 
     if (N <= QuadTreeLeafSize)
     {
@@ -46,24 +42,82 @@ public:
       int topRightIdx[N];
       int botLeftIdx[N];
       int botRightIdx[N];
-        
-      // Iterate over index
-      for (int i = 0; i < N; i++)
-      {
-        int particleIdx = idx[i];
-        const Particle &p = particles[particleIdx];
-        bool isLeft = p.position.x < pivot.x;
-        bool isUp = p.position.y < pivot.y;
+      int topLeftCount = 0;
+      int topRightCount = 0;
+      int botLeftCount = 0;
+      int botRightCount = 0;
 
-        if (isLeft && isUp)
-          topLeftIdx[topLeftCount++] = particleIdx;
-        else if (!isLeft && isUp)
-          topRightIdx[topRightCount++] = particleIdx;
-        else if (isLeft && !isUp)
-          botLeftIdx[botLeftCount++] = particleIdx;
-        else
-          botRightIdx[botRightCount++] = particleIdx;
+      int* offsets[4];
+      #pragma omp parallel
+      {
+        // Compute indexes for each thread
+        int localTopLeftIdx[N];
+        int localTopRightIdx[N];
+        int localBotLeftIdx[N];
+        int localBotRightIdx[N];
+        int localTopLeftCount = 0;
+        int localTopRightCount = 0;
+        int localBotLeftCount = 0;
+        int localBotRightCount = 0;
+        #pragma omp for
+        for (int i = 0; i < N; i++)
+        {
+            int particleIdx = idx[i];
+            const Particle &p = particles[particleIdx];
+            bool isLeft = p.position.x < pivot.x;
+            bool isUp = p.position.y < pivot.y;
+
+            if (isLeft && isUp)
+                localTopLeftIdx[localTopLeftCount++] = particleIdx;
+            else if (!isLeft && isUp)
+                localTopRightIdx[localTopRightCount++] = particleIdx;
+            else if (isLeft && !isUp)
+                localBotLeftIdx[localBotLeftCount++] = particleIdx;
+            else
+                localBotRightIdx[localBotRightCount++] = particleIdx;
+        }
+        // Compute offsets via scans
+        #pragma omp single
+        {
+            offsets[0] = new int[omp_get_num_threads()+1];
+            offsets[1] = new int[omp_get_num_threads()+1];
+            offsets[2] = new int[omp_get_num_threads()+1];
+            offsets[3] = new int[omp_get_num_threads()+1];
+            offsets[0][0] = 0;
+            offsets[1][0] = 0;
+            offsets[2][0] = 0;
+            offsets[3][0] = 0;
+        }
+        offsets[0][omp_get_thread_num()+1] = localTopLeftCount;
+        offsets[1][omp_get_thread_num()+1] = localTopRightCount;
+        offsets[2][omp_get_thread_num()+1] = localBotLeftCount;
+        offsets[3][omp_get_thread_num()+1] = localBotRightCount;
+        #pragma omp barrier
+        #pragma omp for
+        for(int i = 0; i < 4; i++)
+        {
+            for(int j = 1; j<omp_get_num_threads()+1; j++)
+            {
+                offsets[i][j] += offsets[i][j-1];
+            }
+        }
+        // Combine indexes across threads
+        #pragma omp single
+        {
+            topLeftCount = offsets[0][omp_get_num_threads()];
+            topRightCount = offsets[1][omp_get_num_threads()];
+            botLeftCount = offsets[2][omp_get_num_threads()];
+            botRightCount = offsets[3][omp_get_num_threads()];
+        }
+        std::move(localTopLeftIdx, localTopLeftIdx+localTopLeftCount, topLeftIdx+offsets[0][omp_get_thread_num()]);
+        std::move(localTopRightIdx, localTopRightIdx+localTopRightCount, topRightIdx+offsets[1][omp_get_thread_num()]);
+        std::move(localBotLeftIdx, localBotLeftIdx+localBotLeftCount, botLeftIdx+offsets[2][omp_get_thread_num()]);
+        std::move(localBotRightIdx, localBotRightIdx+localBotRightCount, botRightIdx+offsets[3][omp_get_thread_num()]);
       }
+      delete[] offsets[0];
+      delete[] offsets[1];
+      delete[] offsets[2];
+      delete[] offsets[3];
 
       #pragma omp parallel for schedule(static, 1)
       for (int i = 0; i < 4; i++)
