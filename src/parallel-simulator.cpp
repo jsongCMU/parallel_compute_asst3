@@ -59,7 +59,7 @@ public:
         int localTopRightCount = 0;
         int localBotLeftCount = 0;
         int localBotRightCount = 0;
-        #pragma omp for
+        #pragma omp for nowait
         for (int i = 0; i < N; i++)
         {
             int particleIdx = idx[i];
