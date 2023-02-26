@@ -14,124 +14,104 @@
 const int QuadTreeLeafSize = 32;
 class ParallelNBodySimulator : public INBodySimulator {
 public:
+  void insert(QuadTreeNode* node, Particle &p, Vec2 bmin, Vec2 bmax)
+  {
+    Vec2 pivot;
+    Vec2 topLeft = bmin;
+    Vec2 botRight = bmax;
+
+    Vec2 prevTopLeft = bmin;
+    Vec2 prevBotRight = bmax;
+    
+
+    QuadTreeNode* prev_node = nullptr;
+
+    while (node != nullptr)
+    {
+      prev_node = node;
+
+      pivot.x = (botRight.x + topLeft.x) / 2;
+      pivot.y = (botRight.y + topLeft.y) / 2;
+
+      bool isLeft = p.position.x < pivot.x;
+      bool isUp = p.position.y < pivot.y;
+
+      if (isLeft && isUp)
+      {
+        node = node->children[0].get();
+
+        prevTopLeft = topLeft;
+        prevBotRight = botRight;
+
+        botRight = pivot;
+      }
+      else if (!isLeft && isUp)
+      {
+        node = node->children[1].get();
+
+        prevTopLeft = topLeft;
+        prevBotRight = botRight;
+
+        topLeft = {pivot.x, topLeft.y};
+        botRight = {botRight.x, pivot.y};
+      }
+      else if (isLeft && !isUp)
+      {
+        node = node->children[2].get();
+        
+        prevTopLeft = topLeft;
+        prevBotRight = botRight;
+
+        topLeft = {topLeft.x, pivot.y};
+        botRight = {pivot.x, botRight.y};
+      }
+      else
+      {
+        node = node->children[3].get();
+
+        prevTopLeft = topLeft;
+        prevBotRight = botRight;
+
+        topLeft = pivot;
+      }
+    }
+    node = prev_node;
+
+    if (node->particles.size() > QuadTreeLeafSize)
+    {
+      node->isLeaf = false;
+      
+      // Create new children
+      for (int i = 0; i < 4; i++)
+      {
+        node->children[i] = std::unique_ptr<QuadTreeNode>(new QuadTreeNode);
+        node->children[i]->isLeaf = true;
+      }
+
+      for (int i = 0; i < QuadTreeLeafSize; i++)
+      {
+        insert(node, node->particles[i], prevTopLeft, prevBotRight);
+      }
+
+      insert(node, p, prevTopLeft, prevBotRight);
+
+      node->particles.clear();
+    }
+    else
+      node->particles.push_back(p);
+  }
+
   // TODO: implement a function that builds and returns a quadtree containing
   // particles. You do not have to preserve this function type.
   std::unique_ptr<QuadTreeNode> buildQuadTree(std::vector<Particle> &particles,
-                                              Vec2 bmin, Vec2 bmax) {
+                                              Vec2 bmin, Vec2 bmax, int level = 0) {
 
     std::unique_ptr<QuadTreeNode> curNode(new QuadTreeNode);
-    if (particles.size() <= QuadTreeLeafSize)
-    { 
-      curNode->isLeaf = true;
-      curNode->particles = particles;
-      return curNode;
-    }
-    else
-    {
-      curNode->isLeaf = false;
-      Vec2 pivot;
-      pivot.x = (bmax.x + bmin.x) / 2;
-      pivot.y = (bmax.y + bmin.y) / 2;
-      
-      std::vector<Particle> totalChildVectors[4];
-    //   totalChildVectors[0].reserve(particles.size());
-    //   totalChildVectors[1].reserve(particles.size());
-    //   totalChildVectors[2].reserve(particles.size());
-    //   totalChildVectors[3].reserve(particles.size());
-      int* offsets[4];
-      #pragma omp parallel
-      {
-        std::vector<Particle> childVectors[4];
-        #pragma omp for nowait schedule(dynamic, 32)
-        for(int idx = 0; idx < particles.size(); idx++)
-        {
-            const Particle &p = particles[idx];
-            bool isLeft = p.position.x < pivot.x;
-            bool isUp = p.position.y < pivot.y;
+    
+    for (int i = 0; i < particles.size(); i++)
+      insert(curNode.get(), particles[i], bmin, bmax);
 
-            if (isLeft && isUp)
-            childVectors[0].push_back(p);
-            else if (!isLeft && isUp)
-            childVectors[1].push_back(p);
-            else if (isLeft && !isUp)
-            childVectors[2].push_back(p);
-            else
-            childVectors[3].push_back(p);
-        }
-        // Scan to determine offset for placing in global vector
-        #pragma omp single
-        {
-            offsets[0] = new int[omp_get_num_threads()+1];
-            offsets[1] = new int[omp_get_num_threads()+1];
-            offsets[2] = new int[omp_get_num_threads()+1];
-            offsets[3] = new int[omp_get_num_threads()+1];
-            offsets[0][0] = 0;
-            offsets[1][0] = 0;
-            offsets[2][0] = 0;
-            offsets[3][0] = 0;
-        }
-        for(int i=0; i<4; i++)
-        {
-            offsets[i][omp_get_thread_num()+1] = childVectors[i].size();
-        }
-        #pragma omp barrier
-        #pragma omp for
-        for(int i = 0; i < 4; i++) // TODO: parallelize outer loop since independent
-        {
-            for(int j = 1; j<omp_get_num_threads()+1; j++)
-            {
-                offsets[i][j] += offsets[i][j-1];
-            }
-            totalChildVectors[i].resize(offsets[i][omp_get_num_threads()]);
-        }
-        // Update global
-        #pragma omp barrier
-        std::move(childVectors[0].begin(), childVectors[0].end(), totalChildVectors[0].begin()+offsets[0][omp_get_thread_num()]);
-        std::move(childVectors[1].begin(), childVectors[1].end(), totalChildVectors[1].begin()+offsets[1][omp_get_thread_num()]);
-        std::move(childVectors[2].begin(), childVectors[2].end(), totalChildVectors[2].begin()+offsets[2][omp_get_thread_num()]);
-        std::move(childVectors[3].begin(), childVectors[3].end(), totalChildVectors[3].begin()+offsets[3][omp_get_thread_num()]);
-        // for(int i = 0; i < 4; i++)
-        // {
-        //     int j = (omp_get_thread_num() + i)%4;
-        //     if(childVectors[j].size())
-        //     {
-        //         #pragma omp critical
-        //         {
-        //             totalChildVectors[j].insert(totalChildVectors[j].end(), childVectors[j].begin(), childVectors[j].end());
-        //         }
-        //     }
-        // }
-      }
-      delete[] offsets[0];
-      delete[] offsets[1];
-      delete[] offsets[2];
-      delete[] offsets[3];
-      
-      #pragma omp parallel for schedule(dynamic)
-      for (int i = 0; i < 4; i++)
-      {
-        if (i == 0)
-          curNode->children[0] = buildQuadTree(totalChildVectors[0], bmin, pivot);
-        else if (i == 1)
-        {
-          Vec2 topRightMin = {pivot.x, bmin.y};
-          Vec2 topRightMax = {bmax.x, pivot.y};
-          curNode->children[1] = buildQuadTree(totalChildVectors[1], topRightMin, topRightMax);
-        }
-        else if (i == 2)
-        {
-          Vec2 bottomLeftMin = {bmin.x, pivot.y};
-          Vec2 bottomLeftMax = {pivot.x, bmax.y};
-          curNode->children[2] = buildQuadTree(totalChildVectors[2], bottomLeftMin, bottomLeftMax);
-        }
-        else
-          curNode->children[3] = buildQuadTree(totalChildVectors[3], pivot, bmax);
-      }
-
-      return curNode;
-    }
-
-    return nullptr;
+    return curNode;
   }
 
   // Do not modify this function type.
