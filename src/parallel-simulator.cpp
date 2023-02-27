@@ -17,7 +17,7 @@ public:
   // TODO: implement a function that builds and returns a quadtree containing
   // particles. You do not have to preserve this function type.
   std::unique_ptr<QuadTreeNode> buildQuadTree(const std::vector<Particle> &particles,
-                                              Vec2 bmin, Vec2 bmax, int N, int* idx) {
+                                              Vec2 bmin, Vec2 bmax, int N, int* idx, int level = 0) {
 
     std::unique_ptr<QuadTreeNode> curNode(new QuadTreeNode);
 
@@ -119,25 +119,44 @@ public:
       delete[] offsets[2];
       delete[] offsets[3];
 
-      #pragma omp parallel for schedule(static, 1)
-      for (int i = 0; i < 4; i++)
+      // Stop at level 5 or if the number of threads is too low
+      if (level <= 5 || omp_get_max_threads() < 4)
       {
-        if (i == 0)
-          curNode->children[0] = buildQuadTree(particles, bmin, pivot, topLeftCount, topLeftIdx);
-        else if (i == 1)
+        #pragma omp parallel
         {
-          Vec2 topRightMin = {pivot.x, bmin.y};
-          Vec2 topRightMax = {bmax.x, pivot.y};
-          curNode->children[1] = buildQuadTree(particles, topRightMin, topRightMax, topRightCount, topRightIdx);
+          #pragma omp single
+          {
+            #pragma omp task untied default(none) shared(curNode, particles, bmin, pivot, topLeftCount,topLeftIdx, level)
+            curNode->children[0] = buildQuadTree(particles, bmin, pivot, topLeftCount, topLeftIdx, level + 1);
+
+            Vec2 topRightMin = {pivot.x, bmin.y};
+            Vec2 topRightMax = {bmax.x, pivot.y};
+            #pragma omp task untied default(none) shared(curNode, particles, topRightMin, topRightMax, topRightCount, topRightIdx, level)
+            curNode->children[1] = buildQuadTree(particles, topRightMin, topRightMax, topRightCount, topRightIdx, level + 1);
+            
+            Vec2 bottomLeftMin = {bmin.x, pivot.y};
+            Vec2 bottomLeftMax = {pivot.x, bmax.y};
+            #pragma omp task untied default(none) shared(curNode, particles, bottomLeftMin, bottomLeftMax, botLeftCount, botLeftIdx, level)
+            curNode->children[2] = buildQuadTree(particles, bottomLeftMin, bottomLeftMax, botLeftCount, botLeftIdx, level + 1);
+
+            #pragma omp task untied default(none) shared(curNode, particles, pivot, bmax, botRightCount, botRightIdx, level)
+            curNode->children[3] = buildQuadTree(particles, pivot, bmax, botRightCount, botRightIdx, level + 1);
+          }
         }
-        else if (i == 2)
-        {
-          Vec2 bottomLeftMin = {bmin.x, pivot.y};
-          Vec2 bottomLeftMax = {pivot.x, bmax.y};
-          curNode->children[2] = buildQuadTree(particles, bottomLeftMin, bottomLeftMax, botLeftCount, botLeftIdx);
-        }
-        else
-          curNode->children[3] = buildQuadTree(particles, pivot, bmax, botRightCount, botRightIdx);
+      }
+      else 
+      {
+        curNode->children[0] = buildQuadTree(particles, bmin, pivot, topLeftCount, topLeftIdx, level + 1);
+
+        Vec2 topRightMin = {pivot.x, bmin.y};
+        Vec2 topRightMax = {bmax.x, pivot.y};
+        curNode->children[1] = buildQuadTree(particles, topRightMin, topRightMax, topRightCount, topRightIdx, level + 1);
+        
+        Vec2 bottomLeftMin = {bmin.x, pivot.y};
+        Vec2 bottomLeftMax = {pivot.x, bmax.y};
+        curNode->children[2] = buildQuadTree(particles, bottomLeftMin, bottomLeftMax, botLeftCount, botLeftIdx, level + 1);
+
+        curNode->children[3] = buildQuadTree(particles, pivot, bmax, botRightCount, botRightIdx, level + 1);
       }
 
       return curNode;
@@ -180,6 +199,8 @@ public:
     return quadTree;
   }
 
+  #pragma omp declare reduction(Vec2Plus: Vec2: omp_out += omp_in)
+
   // Do not modify this function type.
   virtual void simulateStep(AccelerationStructure *accel,
                             std::vector<Particle> &particles,
@@ -187,26 +208,22 @@ public:
                             StepParameters params) override {
     // TODO: implement parallel version of quad-tree accelerated n-body
     // simulation here, using quadTree as acceleration structure
-    #pragma omp parallel for schedule(dynamic, 4)
+    #pragma omp parallel for schedule(dynamic, 64)
     for (int i = 0; i < particles.size(); i++)
     {
       Particle curParticle = particles[i];
 
-      // Vec2 force = Vec2(0.0f, 0.0f);
-      float x_force = 0;
-      float y_force = 0;
+      Vec2 force = Vec2(0.0f, 0.0f);
       std::vector<Particle> nearbyParticles;
       accel->getParticles(nearbyParticles, curParticle.position, params.cullRadius);
 
-      #pragma omp parallel for reduction(+:x_force,y_force)
+      #pragma omp parallel for reduction(Vec2Plus:force)
       for (const Particle& nearbyP : nearbyParticles)
       {
-        Vec2 force = computeForce(curParticle, nearbyP, params.cullRadius);
-        x_force += force.x;
-        y_force += force.y;
+        force += computeForce(curParticle, nearbyP, params.cullRadius);
       }
 
-      newParticles[i] = updateParticle(curParticle, Vec2(x_force,y_force), params.deltaTime);
+      newParticles[i] = updateParticle(curParticle, force, params.deltaTime);
     }
   }
 };

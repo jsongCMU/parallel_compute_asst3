@@ -8,9 +8,8 @@
 void getParticlesImpl(std::vector<Particle> &particles, QuadTreeNode *node,
                       Vec2 bmin, Vec2 bmax, Vec2 position, float radius) {
   if (node->isLeaf) {
-    float radSq = pow(radius, 2);
     for (auto &p : node->particles)
-      if ((position - p.position).length2() < radSq)
+      if ((position - p.position).length() < radius)
         particles.push_back(p);
     return;
   }

@@ -48,7 +48,8 @@ struct Particle {
   float mass;
   Vec2 position;
   Vec2 velocity;
-};
+  int padding[2];
+} __attribute__ ((__aligned__(32)));
 
 // Do not modify this function.
 inline Vec2 computeForce(const Particle &target, const Particle &attractor,
