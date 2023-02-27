@@ -134,6 +134,126 @@ public:
     return nullptr;
   }
 
+  // Convert leaf into a branch
+  std::unique_ptr<QuadTreeNode> makeBranch(QuadTreeNode *leaf, Vec2 bmin, Vec2 bmax)
+  {
+    // Set up branch
+    std::unique_ptr<QuadTreeNode> curNode(new QuadTreeNode);
+    curNode->isLeaf = false;
+    // Bin particles into children
+    Vec2 pivot = {(bmax.x + bmin.x) / 2, (bmax.y + bmin.y) / 2};
+    std::vector<Particle> childVectors[4];
+    for(int idx = 0; idx < leaf->particles.size(); idx++)
+    {
+        const Particle &p = leaf->particles[idx];
+        bool isLeft = p.position.x < pivot.x;
+        bool isUp = p.position.y < pivot.y;
+
+        if (isLeft && isUp)
+        childVectors[0].push_back(p);
+        else if (!isLeft && isUp)
+        childVectors[1].push_back(p);
+        else if (isLeft && !isUp)
+        childVectors[2].push_back(p);
+        else
+        childVectors[3].push_back(p);
+    }
+    // Make children
+    for(int i = 0; i < 4; i++)
+    {
+      std::unique_ptr<QuadTreeNode> child(new QuadTreeNode);
+      child->isLeaf = true;
+      child->particles = childVectors[i];
+      curNode->children[0] = std::move(child);
+    }
+    return curNode;
+  }
+
+  std::unique_ptr<QuadTreeNode> fuseTrees(
+    QuadTreeNode *nodeA, 
+    QuadTreeNode *nodeB,
+    Vec2 bmin, Vec2 bmax) {
+      std::unique_ptr<QuadTreeNode> curNode(new QuadTreeNode);
+      if(nodeA->isLeaf && nodeB->isLeaf)
+      {
+        // Both nodes are leaves; combine them
+        curNode->isLeaf = true;
+        curNode->particles.reserve(nodeA->particles.size() + nodeB->particles.size());
+        curNode->particles.insert(curNode->particles.end(), nodeA->particles.begin(), nodeA->particles.end());
+        curNode->particles.insert(curNode->particles.end(), nodeB->particles.begin(), nodeB->particles.end());
+        return curNode;
+      }
+      else if((nodeA->isLeaf && !nodeB->isLeaf) || (!nodeA->isLeaf && nodeB->isLeaf))
+      {
+        // One node is branch, other is leaf
+        if(nodeA->isLeaf)
+        {
+          std::unique_ptr<QuadTreeNode> branched = makeBranch(nodeA, bmin, bmax);
+          nodeA = branched.get();
+          Vec2 pivot = {(bmax.x + bmin.x) / 2, (bmax.y + bmin.y) / 2};
+          Vec2 topRightMin = {pivot.x, bmin.y};
+          Vec2 topRightMax = {bmax.x, pivot.y};
+          Vec2 bottomLeftMin = {bmin.x, pivot.y};
+          Vec2 bottomLeftMax = {pivot.x, bmax.y};
+          curNode->children[0] = fuseTrees(nodeA->children[0].get(), nodeB->children[0].get(), bmin, pivot);
+          curNode->children[1] = fuseTrees(nodeA->children[1].get(), nodeB->children[1].get(), topRightMin, topRightMax);
+          curNode->children[2] = fuseTrees(nodeA->children[2].get(), nodeB->children[2].get(), bottomLeftMin, bottomLeftMax);
+          curNode->children[3] = fuseTrees(nodeA->children[3].get(), nodeB->children[3].get(), pivot, bmax);
+          return curNode;
+        }
+        else
+        {
+          std::unique_ptr<QuadTreeNode> branched = makeBranch(nodeB, bmin, bmax);
+          nodeB = branched.get();
+          Vec2 pivot = {(bmax.x + bmin.x) / 2, (bmax.y + bmin.y) / 2};
+          Vec2 topRightMin = {pivot.x, bmin.y};
+          Vec2 topRightMax = {bmax.x, pivot.y};
+          Vec2 bottomLeftMin = {bmin.x, pivot.y};
+          Vec2 bottomLeftMax = {pivot.x, bmax.y};
+          curNode->children[0] = fuseTrees(nodeA->children[0].get(), nodeB->children[0].get(), bmin, pivot);
+          curNode->children[1] = fuseTrees(nodeA->children[1].get(), nodeB->children[1].get(), topRightMin, topRightMax);
+          curNode->children[2] = fuseTrees(nodeA->children[2].get(), nodeB->children[2].get(), bottomLeftMin, bottomLeftMax);
+          curNode->children[3] = fuseTrees(nodeA->children[3].get(), nodeB->children[3].get(), pivot, bmax);
+          return curNode;
+        }
+      }
+      else
+      {
+        // Both nodes are branches; recur
+        Vec2 pivot = {(bmax.x + bmin.x) / 2, (bmax.y + bmin.y) / 2};
+        Vec2 topRightMin = {pivot.x, bmin.y};
+        Vec2 topRightMax = {bmax.x, pivot.y};
+        Vec2 bottomLeftMin = {bmin.x, pivot.y};
+        Vec2 bottomLeftMax = {pivot.x, bmax.y};
+        curNode->children[0] = fuseTrees(nodeA->children[0].get(), nodeB->children[0].get(), bmin, pivot);
+        curNode->children[1] = fuseTrees(nodeA->children[1].get(), nodeB->children[1].get(), topRightMin, topRightMax);
+        curNode->children[2] = fuseTrees(nodeA->children[2].get(), nodeB->children[2].get(), bottomLeftMin, bottomLeftMax);
+        curNode->children[3] = fuseTrees(nodeA->children[3].get(), nodeB->children[3].get(), pivot, bmax);
+        return curNode;
+      }
+  }
+
+  std::unique_ptr<QuadTreeNode> buildQuadTreeSuper(std::vector<Particle> &particles,
+                                              Vec2 bmin, Vec2 bmax) {
+    
+    // A and B are constructed from particles; C is their fusion
+    auto quadTreeA = std::make_unique<QuadTree>();
+    auto quadTreeB = std::make_unique<QuadTree>();
+    // Set bounds
+    quadTreeA->bmin = bmin;
+    quadTreeA->bmax = bmax;
+    quadTreeB->bmin = bmin;
+    quadTreeB->bmax = bmax;
+    // Set up particles
+    std::vector<Particle> particlesA(particles.begin(), particles.begin()+particles.size()/2);
+    std::vector<Particle> particlesB(particles.begin()+particles.size()/2, particles.end());
+    // Build both trees
+    quadTreeA->root = buildQuadTree(particlesA, bmin, bmax);
+    quadTreeA->root = buildQuadTree(particlesB, bmin, bmax);
+    // Return fused tree
+    return fuseTrees(quadTreeA->root.get(), quadTreeB->root.get(), bmin, bmax);
+  }
+
   // Do not modify this function type.
   virtual std::unique_ptr<AccelerationStructure>
   buildAccelerationStructure(std::vector<Particle> &particles) {
@@ -155,7 +275,7 @@ public:
     quadTree->bmax = bmax;
 
     // build nodes
-    quadTree->root = buildQuadTree(particles, bmin, bmax);
+    quadTree->root = buildQuadTreeSuper(particles, bmin, bmax);
     if (!quadTree->checkTree()) {
       std::cout << "Your Tree has Error!" << std::endl;
     }
