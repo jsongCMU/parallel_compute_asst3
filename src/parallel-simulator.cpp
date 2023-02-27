@@ -77,7 +77,7 @@ public:
     }
     node = prev_node;
 
-    if (node->particles.size() > QuadTreeLeafSize)
+    if (node->particles.size() >= QuadTreeLeafSize)
     {
       node->isLeaf = false;
       
