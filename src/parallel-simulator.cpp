@@ -208,7 +208,7 @@ public:
                             StepParameters params) override {
     // TODO: implement parallel version of quad-tree accelerated n-body
     // simulation here, using quadTree as acceleration structure
-    #pragma omp parallel for schedule(dynamic, 64)
+    #pragma omp parallel for schedule(dynamic, (particles.size() + 63)/64)
     for (int i = 0; i < particles.size(); i++)
     {
       Particle curParticle = particles[i];
